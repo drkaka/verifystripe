@@ -3,19 +3,23 @@ package verifystripe
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"strings"
 	"time"
 )
 
 // Verify the webhook event.
-func Verify(payload, sigHeader, secret string) (bool, error) {
-	ts, sigs := parseHeader(sigHeader)
-	if len(sigs) == 0 {
+func Verify(payload []byte, sigHeader, secret string) (bool, error) {
+	ts, sigs, err := parseHeader(sigHeader)
+	if err != nil {
+		return false, err
+	} else if len(sigs) == 0 {
 		return false, nil
 	}
 
-	if ok, err := checkSignature(ts+"."+payload, secret, sigs); err != nil {
+	realPayload := append(append([]byte(ts), '.'), payload...)
+	if ok, err := checkSignature(realPayload, secret, sigs); err != nil {
 		return false, err
 	} else if !ok {
 		return false, nil
@@ -35,34 +39,38 @@ func Verify(payload, sigHeader, secret string) (bool, error) {
 
 // parseHeader to get detail from header["Stripe-Signature"]
 // return timestamp string and signature
-func parseHeader(sigHeader string) (string, []string) {
+func parseHeader(sigHeader string) (string, [][]byte, error) {
 	ts := "0"
-	allSigs := make([]string, 0)
+	var allSigs [][]byte
 
 	sigs := strings.Split(sigHeader, ",")
 	for _, one := range sigs {
 		info := strings.Split(one, "=")
 		if len(info) != 2 {
-			return ts, allSigs
+			return ts, allSigs, nil
 		}
 		if info[0] == "t" {
 			ts = info[1]
 		} else if info[0] == "v1" {
-			allSigs = append(allSigs, info[1])
+			oneSig, err := hex.DecodeString(info[1])
+			if err != nil {
+				return "", allSigs, err
+			}
+			allSigs = append(allSigs, oneSig)
 		}
 	}
-	return ts, allSigs
+	return ts, allSigs, nil
 }
 
-func checkSignature(payload, secret string, sigs []string) (bool, error) {
+func checkSignature(payload []byte, secret string, sigs [][]byte) (bool, error) {
 	mac := hmac.New(sha256.New, []byte(secret))
-	_, err := mac.Write([]byte(payload))
+	_, err := mac.Write(payload)
 	if err != nil {
 		return false, err
 	}
 	computed := mac.Sum(nil)
 	for _, one := range sigs {
-		if hmac.Equal(computed, []byte(one)) {
+		if hmac.Equal(computed, one) {
 			return true, nil
 		}
 	}
